@@ -178,4 +178,7 @@ pyrightconfig.json
 # config
 config.ini
 
+# test-module
+test-selenium.py
+
 # End of https://www.toptal.com/developers/gitignore/api/python
