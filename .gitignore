@@ -178,6 +178,9 @@ pyrightconfig.json
 # config
 config.ini
 
+# pickle
+data.pickle
+
 # test-module
 test-selenium.py
 
