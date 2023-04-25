@@ -1,23 +1,34 @@
+import traceback
 import configparser
+from discord_webhook import DiscordWebhook
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-def read_login_info():
-    config = configparser.ConfigParser()
-    config.read("config.ini")
-    username = config.get("login", "username")
-    password = config.get("login", "password")
-    return username, password
+# config
+config = configparser.ConfigParser()
+config.read("config.ini")
 
-def login(driver, username, password):
+# Discord
+WEBHOOK_URL = config.get('DISCORD', 'WEBHOOK_URL')
+
+# Login
+USER_NAME = config.get("login", "username")
+PASS_WORD = config.get("login", "password")
+
+
+def send_error_notification(error_message: str):
+    webhook = DiscordWebhook(url=WEBHOOK_URL, content=f'An error occurred: {error_message}')
+    webhook.execute()
+
+def login(driver):
     # access target url
     driver.get("https://kabu.click-sec.com/cfd/trade.do")
 
     # input user-name and password
-    driver.find_element(By.NAME, "j_username").send_keys(username)
-    driver.find_element(By.NAME, "j_password").send_keys(password)
+    driver.find_element(By.NAME, "j_username").send_keys(USER_NAME)
+    driver.find_element(By.NAME, "j_password").send_keys(PASS_WORD)
 
     login_button = driver.find_element(By.XPATH, "//button[@value='Login']")
     login_button.click()
@@ -79,15 +90,13 @@ def order(driver, pred):
 
 
 def main():
-    # ログイン情報を読み込む
-    username, password = read_login_info()
-
-    # WebDriverをセットアップ
+    # setup WebDriver
     driver = webdriver.Edge(executable_path="path/to/msedgedriver.exe")
 
     try:
-        # ログイン
-        login(driver, username, password)
+        raise ValueError("これはテストのための例外です")
+
+        login(driver)
 
         # モデルによる予測
         pred = ""
@@ -96,7 +105,7 @@ def main():
         oi = exists_open_interest(driver)
 
         # プラスかマイナスなら利確・損切りの判断
-
+        # 全決済のボタンをクリック
 
         # 建て玉がある場合、決済するかを判断
 
@@ -105,10 +114,11 @@ def main():
         order(driver, pred)
 
     except Exception as e:
-        print(f"An error occurred: {e}")
+        error_message = f'{type(e).__name__}: {e}'
+        traceback.print_exc()
+        send_error_notification(error_message)
 
     finally:
-        # WebDriverを閉じる
         driver.quit()
 
 if __name__ == "__main__":

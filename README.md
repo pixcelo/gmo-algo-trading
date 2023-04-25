@@ -21,3 +21,11 @@
 - データフレームの先頭部分（head）
 
 データフレームはpickle形式で保存され、後で読み込んで利用できます。
+
+## 設定ファイル構成 config.ini
+[login]
+username = xxxx
+password = xxxx
+
+[DISCORD]
+WEBHOOK_URL = xxxx
