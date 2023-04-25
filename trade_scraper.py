@@ -12,14 +12,13 @@ def read_login_info():
     return username, password
 
 def login(driver, username, password):
-    # ログインページにアクセス
+    # access target url
     driver.get("https://kabu.click-sec.com/cfd/trade.do")
 
-    # ユーザー名とパスワードを入力
+    # input user-name and password
     driver.find_element(By.NAME, "j_username").send_keys(username)
     driver.find_element(By.NAME, "j_password").send_keys(password)
 
-    # ログインボタンをクリック
     login_button = driver.find_element(By.XPATH, "//button[@value='Login']")
     login_button.click()
 
@@ -27,12 +26,8 @@ def login(driver, username, password):
     link_element = driver.find_element(By.CLASS_NAME, "js-cfd")
     link_element.click()
 
-def some_condition():
-    # ここに条件判定のコードを書く
-    # 条件が満たされた場合はTrueを返し、それ以外の場合はFalseを返す
-    return True
-
-def order(driver, side):
+# 売りと買いのどちらも0なら建て玉なし
+def exists_open_interest(driver):
 
     # ローカルストレージの値を設定
     local_storage_data = {
@@ -51,14 +46,6 @@ def order(driver, side):
 
     # ページをリロードして、新しいローカルストレージの値でアクセス
     driver.refresh()
-    
-    # if some_condition():
-    #     sell_button.click()
-    # else:
-    #     buy_button.click()
-
-    # speed_order_element = driver.find_element(By.ID, "id_plaHref")
-    # driver.execute_script("arguments[0].click();", speed_order_element)
 
     # iframe要素を取得する
     iframe = driver.find_element(By.ID, "iframe_trade")
@@ -69,6 +56,27 @@ def order(driver, side):
     # スピード注文タブに切り替える
     speed_order_element = driver.find_element(By.ID, "react-tabs-14")
     speed_order_element.click()
+
+    # 建て玉を確認 => 損益(pips)の値を確認
+    sell_oi = driver.find_element(By.XPATH, '//*[@id="react-tabs-15"]/div/div[3]/div[3]/div/div[5]/div/div[1]/label')
+    buy_oi = driver.find_element(By.XPATH, '//*[@id="react-tabs-15"]/div/div[3]/div[3]/div/div[5]/div/div[3]/label')
+
+    return {"sell": sell_oi.text, "buy": buy_oi.text} 
+
+def order(driver, pred):
+
+    # lot
+    lot_button = driver.find_element(By.XPATH, '//*[@id="react-tabs-15"]/div/div[3]/div[4]/div[2]/div/div[2]/button[1]')
+    lot_button.click()
+
+    sell_button = driver.find_element(By.XPATH, '//*[@id="react-tabs-15"]/div/div[3]/div[2]/div[1]/div[1]/div/label')
+    buy_button = driver.find_element(By.XPATH, '//*[@id="react-tabs-15"]/div/div[3]/div[2]/div[1]/div[2]/div/label')
+
+    if pred == 1:
+        buy_button.click()
+    else:
+        sell_button.click()
+
 
 def main():
     # ログイン情報を読み込む
@@ -84,7 +92,16 @@ def main():
         # モデルによる予測
         pred = ""
 
-        # オーダー
+        # 建て玉の損益を確認
+        oi = exists_open_interest(driver)
+
+        # プラスかマイナスなら利確・損切りの判断
+
+
+        # 建て玉がある場合、決済するかを判断
+
+
+        # 建て玉がない場合、予測方向にポジションを持つ
         order(driver, pred)
 
     except Exception as e:
