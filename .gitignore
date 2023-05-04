@@ -181,6 +181,9 @@ config.ini
 # pickle
 data.pickle
 
+# csv
+*.csv
+
 # test-module
 test-selenium.py
 
