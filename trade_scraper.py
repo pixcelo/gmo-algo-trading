@@ -37,6 +37,15 @@ def login(driver):
     link_element = driver.find_element(By.CLASS_NAME, "js-cfd")
     link_element.click()
 
+def get_financial_data(driver):
+    driver.get("https://www.rakuten-sec.co.jp/web/market/data/us10yt.html")
+    iframe = driver.find_element(By.ID, "ifr")
+    driver.switch_to.frame(iframe)
+    ten_years_bond = driver.find_element(By.XPATH, '//*[@id="cBond"]/table[1]/tbody/tr[1]/td/em')
+    bond_text = driver.execute_script("return arguments[0].textContent;", ten_years_bond)
+    
+    return {"ten_years_bond": float(bond_text.replace('％', '')) / 100}
+
 # 売りと買いのどちらも0なら建て玉なし
 def exists_open_interest(driver):
 
@@ -94,7 +103,7 @@ def main():
     driver = webdriver.Edge(executable_path="path/to/msedgedriver.exe")
 
     try:
-        raise ValueError("これはテストのための例外です")
+        financial_data = get_financial_data(driver)
 
         login(driver)
 
