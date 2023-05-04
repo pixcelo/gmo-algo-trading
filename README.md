@@ -29,3 +29,8 @@ password = xxxx
 
 [DISCORD]
 WEBHOOK_URL = xxxx
+
+## dataフォルダ
+dataフォルダにはヒストリカルデータがあります。
+
+ヒストリカルデータをすべて結合するには、`combine_and_sort_csv_files.py`を使用します。
