@@ -17,18 +17,21 @@ combined_df = combine_csv_files(csv_files)
 combined_df['日時'] = pd.to_datetime(combined_df['日時'], format='%Y%m%d%H%M')
 combined_df = combined_df.sort_values(by='日時')
 
-# Replace the header with English column names
+# Replace the header with English column names and remove '_bid' from the names
 combined_df.columns = [
     'date', 
-    'open_bid', 
-    'high_bid', 
-    'low_bid', 
-    'close_bid', 
+    'open', 
+    'high', 
+    'low', 
+    'close', 
     'open_ask', 
     'high_ask', 
     'low_ask', 
     'close_ask'
 ]
+
+# Keep only the date and close columns
+combined_df = combined_df[['date', 'open', 'high', 'low', 'close']]
 
 # Save the result to a new CSV file called 'combined_data.csv'
 combined_df.to_csv("combined_data.csv", index=False)
