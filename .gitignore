@@ -187,4 +187,7 @@ data.pickle
 # test-module
 test-selenium.py
 
+# train models
+model/
+
 # End of https://www.toptal.com/developers/gitignore/api/pythondata.pickle
