@@ -190,4 +190,7 @@ test-selenium.py
 # train models
 model/
 
+# tensorboard
+PPO_tensorboard/
+
 # End of https://www.toptal.com/developers/gitignore/api/pythondata.pickle
