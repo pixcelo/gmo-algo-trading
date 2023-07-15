@@ -193,4 +193,8 @@ model/
 # tensorboard
 PPO_tensorboard/
 
+# env
+drl-env
+myenv
+
 # End of https://www.toptal.com/developers/gitignore/api/pythondata.pickle
