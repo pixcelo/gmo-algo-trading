@@ -12,25 +12,69 @@ class TradingStrategy:
         df["EMA50"] = EMAIndicator(df["5min_close"], window=50, fillna=False).ema_indicator()
         return df
     
-    def trend_direction(self, df, i):
-        if i == 0:  # Skip the first row
-            return None
-        # Calculate the trend direction based on the angle of the EMA
-        if i < 1:
-            return None
-        angle = np.arctan((df.loc[i, "EMA50"] - df.loc[i-1, "EMA50"]) / 1) * (180 / np.pi)
+    def calculate_trend_line_dataframe(self, df, num=2, direction="high"):
+        """
+        Calculate the trend line based on the last 'num' pivot highs or lows using pandas DataFrame.
         
-        # Check trend direction
-        if angle > 0:
-            return "up"
-        elif angle < 0:
-            return "down"
+        Parameters:
+        - df (pd.DataFrame): DataFrame with 'low' and 'high' columns.
+        - num (int): Number of pivot points to consider.
+        - direction (str): Either "high" for pivothigh or "low" for pivotlow.
+        
+        Returns:
+        - pd.Series: Trend line values.
+        """
+        
+        if direction == "high":
+            prices = df['high'].values
         else:
-            return None
+            prices = df['low'].values
         
-    def is_strong_trend(self, angle, threshold=1):
-        # Determine if it's a strong trend based on the angle
-        return abs(angle) > threshold
+        # Compute the trend line using the optimized function
+        trend_line = self.calculate_trend_line_optimized(prices, num, direction)
+        
+        return pd.Series(trend_line, index=df.index, name=f"{direction}_trend_line")
+    
+    def calculate_trend_line_optimized(self, prices, num=2, direction="high"):
+        """
+        Calculate the trend line based on the last 'num' pivot highs or lows.
+        
+        Parameters:
+        - prices (np.array): Array of price values.
+        - num (int): Number of pivot points to consider.
+        - direction (str): Either "high" for pivothigh or "low" for pivotlow.
+        
+        Returns:
+        - np.array: Trend line values.
+        """
+        
+        # Helper function to get the last 'num' pivot highs or lows.
+        def get_pivots(prices, num, direction):
+            if direction == "high":
+                pivots, _ = find_peaks(prices, distance=num)
+            else:
+                pivots, _ = find_peaks(-prices, distance=num)
+            
+            if len(pivots) < num:
+                return []
+            return pivots[-num:]
+        
+        # Helper function to calculate trend line using least squares method.
+        def least_squares_method(x, y):
+            slope, intercept = np.polyfit(x, y, 1)
+            return slope * np.arange(len(prices)) + intercept
+        
+        # Get the last 'num' pivot highs or lows.
+        pivots = get_pivots(prices, num, direction)
+        
+        if len(pivots) == 0:
+            return np.full_like(prices, np.nan)
+        
+        # Calculate trend line using least squares method.
+        y = prices[pivots]
+        return least_squares_method(pivots, y)
+
+
     
     def calculate_resistance_zone(self, df, start, end, buffer=1, rebound_threshold=2):
         data = df['5min_close'].iloc[start:end+1].values
