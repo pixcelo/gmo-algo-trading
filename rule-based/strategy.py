@@ -1,142 +1,117 @@
 import pandas as pd
-from ta.trend import EMAIndicator
 from scipy.signal import find_peaks
 import numpy as np
+from datetime import datetime
+import logging
 
 class TradingStrategy:
+    """
+    トレードロジック
+    使用データ: 1分足と5分足データを取得（1分足から5分足をリサンプリング）
+    1. ５分足のチャート参照
+        連続する安値が上昇しているポイントを特定。（極大値・極小値のピーク）
+    2. トレンドライン(1)の作成
+        上昇する安値のポイントを結ぶ直線を描きます。
+        この直線を「トレンドライン(1)」と呼びます。
+        ※トレンドラインの定義：（下降トレンドなら極大値の切り下がり、上昇トレンドなら極小値のピークの切り上がり）を結んだもの
+        トレンドラインの延長線上に、将来クロスするポイントを見つける
+    3. 最新の高値の特定
+        ５分足のチャートでの最新の高値を特定します。
+    4. 水平線(2)の作成
+        最新の高値から水平に直線を引きます。
+        この直線を「水平線(2)」と呼びます。
+    5. 三角形の形状の作成
+        「トレンドライン(1)」と「水平線(2)」の交点を基に、三角形の形状を形成します。
+    6. １分足のチャート監視
+        価格が「トレンドライン(1)」に触れた後、価格が反転する動き（トレンドラインより下に行った、もしくは触れたあとの上昇を指す）を示した場合、そのポイントで取引を開始（エントリー）します。
+    （エントリー条件は、１分足でローソク足が一度、トレンドライン１に触れたあと、再度、１分足の終値がトレンドラインの上で確定したときの、次の始値です）
+    7. 利確
+        10pipに設定（TODO:将来的にトレールストップを実装する）
+    8. ストップロス
+        エントリーポイントの直近の安値（極小値）よりも少し下の位置に、損切りのためのストップロス注文を設定
+        上昇トレンドラインの起点となっている安値（極小値）のうち、最も近い極小値を直近安値と定義
+    """
     def __init__(self, lot_size=10000):
         self.lot_size = lot_size
+        self.last_pivots_high = []
+        self.last_pivots_low = []
+        self.last_trendline = None
 
     def prepare_data(self, df):
-        # Calculate moving averages
-        df["EMA50"] = EMAIndicator(df["5min_close"], window=50, fillna=False).ema_indicator()
+        df["EMA50"] = df["5min_close"].ewm(span=50, adjust=False).mean()
         return df
-    
-    def calculate_trend_line_dataframe(self, df, num=2, direction="high"):
-        """
-        Calculate the trend line based on the last 'num' pivot highs or lows using pandas DataFrame.
-        
-        Parameters:
-        - df (pd.DataFrame): DataFrame with 'low' and 'high' columns.
-        - num (int): Number of pivot points to consider.
-        - direction (str): Either "high" for pivothigh or "low" for pivotlow.
-        
-        Returns:
-        - pd.Series: Trend line values.
-        """
-        
+
+    def set_approximate_stop_loss(self, entry_point, data_1min):
+        stop_loss = data_1min['low'].loc[:entry_point].tail(5).min()
+        return stop_loss
+
+    def calculate_trend_line(self, df, direction="high", periods=100, num=2):
+        # Use the last N periods for the calculation
+        df_last_n = df.tail(periods)
+        prices = df_last_n['5min_close'].values
+
+        # Find pivots
         if direction == "high":
-            prices = df['high'].values
+            pivots, _ = find_peaks(prices, distance=num)
         else:
-            prices = df['low'].values
-        
-        # Compute the trend line using the optimized function
-        trend_line = self.calculate_trend_line_optimized(prices, num, direction)
-        
-        return pd.Series(trend_line, index=df.index, name=f"{direction}_trend_line")
-    
-    def calculate_trend_line_optimized(self, prices, num=2, direction="high"):
-        """
-        Calculate the trend line based on the last 'num' pivot highs or lows.
-        
-        Parameters:
-        - prices (np.array): Array of price values.
-        - num (int): Number of pivot points to consider.
-        - direction (str): Either "high" for pivothigh or "low" for pivotlow.
-        
-        Returns:
-        - np.array: Trend line values.
-        """
-        
-        # Helper function to get the last 'num' pivot highs or lows.
-        def get_pivots(prices, num, direction):
-            if direction == "high":
-                pivots, _ = find_peaks(prices, distance=num)
-            else:
-                pivots, _ = find_peaks(-prices, distance=num)
-            
-            if len(pivots) < num:
-                return []
-            return pivots[-num:]
-        
-        # Helper function to calculate trend line using least squares method.
-        def least_squares_method(x, y):
-            slope, intercept = np.polyfit(x, y, 1)
-            return slope * np.arange(len(prices)) + intercept
-        
-        # Get the last 'num' pivot highs or lows.
-        pivots = get_pivots(prices, num, direction)
-        
-        if len(pivots) == 0:
+            pivots, _ = find_peaks(-prices, distance=num)
+
+        # Check if pivots have changed
+        if direction == "high":
+            if len(pivots) != len(self.last_pivots_high) or np.any(pivots != self.last_pivots_high):
+                self.last_pivots_high = pivots
+        elif direction == "low":
+            if len(pivots) != len(self.last_pivots_low) or np.any(pivots != self.last_pivots_low):
+                self.last_pivots_low = pivots
+
+
+        # If not enough pivots, return None
+        if len(pivots) < num:
             return np.full_like(prices, np.nan)
-        
-        # Calculate trend line using least squares method.
+
+        # Calculate trend line using least squares method
         y = prices[pivots]
-        return least_squares_method(pivots, y)
+        slope, intercept = np.polyfit(pivots, y, 1)
+        trendline = slope * np.arange(len(df_last_n)) + intercept
+
+        # Extend the trendline array to match the original dataframe
+        trendline_full = np.full(len(df), np.nan)
+        trendline_full[-len(trendline):] = trendline
+
+        return trendline_full
+
+    def check_entry_condition(self, data_1min, trendline, i, price_point):
+        trendline_value = trendline[-1]
+        # print(f'trendline_value {trendline_value}')
+        if price_point == "low":
+            condition = data_1min['close'].iloc[i-1] <= trendline_value and data_1min['close'].iloc[i] > trendline_value
+        else:
+            condition = data_1min['close'].iloc[i-1] >= trendline_value and data_1min['close'].iloc[i] < trendline_value
+        return condition
 
 
-    
-    def calculate_resistance_zone(self, df, start, end, buffer=1, rebound_threshold=2):
-        data = df['5min_close'].iloc[start:end+1].values
-        maxima_indices, _ = find_peaks(data)
-        maxima_values = data[maxima_indices]
-        upper_bounds = maxima_values + buffer
-        lower_bounds = maxima_values - buffer
-        rebound_counts = np.sum((lower_bounds[:, np.newaxis] < data) & (data < upper_bounds[:, np.newaxis]), axis=1)
-        valid_indices = np.where(rebound_counts >= rebound_threshold)[0]
-        valid_lower_bounds = lower_bounds[valid_indices]
-        valid_upper_bounds = upper_bounds[valid_indices]
-        resistance_zones = list(zip(valid_lower_bounds, valid_upper_bounds))
-        return resistance_zones
-
-    def is_price_in_resistance(self, resistance_zones, price):
-        for zone in resistance_zones:
-            if zone[0] <= price <= zone[1]:
-                return True
-        return False
-
-    def is_higher_lows(self, df, i):
-        if i < 2:
-            return False
-        return df.loc[i, "5min_close"] > df.loc[i-1, "5min_close"] and df.loc[i-1, "5min_close"] > df.loc[i-2, "5min_close"]
-
-    # trade logic
-    def trade_conditions_func(self, df, i, portfolio):
-        if i == 0:  # Skip the first row
-            return None
-
+    def trade_conditions_func(self, df, i, portfolio, direction="low"):
         close = df.loc[i, 'close']
-        close5 = df.loc[i, '5min_close']
         spread = df.loc[i, 'spread']
-
-        resistance_zones = self.calculate_resistance_zone(df, 0, i)
-        in_resistance = self.is_price_in_resistance(resistance_zones, close5)
-        higher_lows = self.is_higher_lows(df, i)
-
-        # Spread conversion to currency unit (1 pip = 0.01 yen)
         spread_cost = spread * 0.01 * self.lot_size
 
-        # Profit and loss thresholds
-        TAKE_PROFIT = 0.005 * portfolio['entry_price'] if portfolio['entry_price'] else 0
-        STOP_LOSS = -0.01 * portfolio['entry_price'] if portfolio['entry_price'] else 0
-
         if portfolio['position'] == 'long':
-            profit = (close - portfolio['entry_price']) - spread_cost
-            if profit > TAKE_PROFIT or profit < STOP_LOSS:
-                return 'exit_long'
-              
-        # elif portfolio['position'] == 'short':
-        #     profit = (portfolio['entry_price'] - close) - spread_cost
-        #     if profit > TAKE_PROFIT or profit < STOP_LOSS:
-        #         return 'exit_short'
+            TAKE_PROFIT = portfolio['entry_price'] + 0.0010
 
-        # Entry conditions
-        elif in_resistance and higher_lows:
-            return 'entry_long'
-          
-        # No entry short condition defined in the requirements, so I am omitting it for now.
-        #elif (conditions for short):
-        #    return 'entry_short'
-        
+            profit = (close - portfolio['entry_price']) - spread_cost
+            if close >= TAKE_PROFIT or close <= portfolio['STOP_LOSS']:
+                portfolio['STOP_LOSS'] = None
+                return 'exit_long'
+
+        trendline = self.calculate_trend_line(df, direction)
+        if self.check_entry_condition(df, trendline, i, direction):
+            if direction == "low":
+                portfolio['STOP_LOSS'] = self.last_pivots_low[-1] - 0.0001
+            else:
+                portfolio['STOP_LOSS'] = self.last_pivots_high[-1] + 0.0001
+            return 'entry_long' if direction == "low" else 'entry_short'
         else:
             return None
+
+
+
