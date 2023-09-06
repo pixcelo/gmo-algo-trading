@@ -6,70 +6,101 @@ from datetime import datetime
 import logging
 
 class TradingStrategy:
+    """
+    トレードロジック
+    使用データ: 1分足と5分足データを取得（1分足から5分足をリサンプリング）
+    1. ５分足のチャート参照
+        連続する安値が上昇しているポイントを特定。（極大値・極小値のピーク）
+    2. トレンドライン(1)の作成
+        上昇する安値のポイントを結ぶ直線を描きます。
+        この直線を「トレンドライン(1)」と呼びます。
+    3. 最新の高値の特定
+        ５分足のチャートでの最新の高値を特定します。
+    4. 水平線(2)の作成
+        最新の高値から水平に直線を引きます。
+        この直線を「水平線(2)」と呼びます。
+    5. 三角形の形状の作成
+        「トレンドライン(1)」と「水平線(2)」の交点を基に、三角形の形状を形成します。
+    6. １分足のチャート監視
+        価格が「トレンドライン(1)」に触れた後、価格が反転する動き（トレンドラインより下に行った、もしくは触れたあとの上昇を指す）を示した場合、そのポイントで取引を開始（エントリー）します。
+    （エントリー条件は、１分足でローソク足が一度、トレンドライン１に触れたあと、再度、１分足の終値がトレンドラインの上で確定したときの、次の始値です）
+    7. 利確
+        10pipに設定（TODO:将来的にトレールストップを実装する）
+    8. ストップロス
+        エントリーポイントの直近の安値（極小値）よりも少し下の位置に、損切りのためのストップロス注文を設定
+        上昇トレンドラインの起点となっている安値（極小値）のうち、最も近い極小値を直近安値と定義
+    """
     def __init__(self, lot_size=10000):
         self.lot_size = lot_size
+        self.last_pivots_high = []
+        self.last_pivots_low = []
+        self.last_trendline = None
 
     def prepare_data(self, df):
         df["EMA50"] = EMAIndicator(df["5min_close"], window=50, fillna=False).ema_indicator()
         return df
 
-    def calculate_trendline(self, data_5min):
-        x = np.arange(len(data_5min))
-        y = data_5min['low']['close'].values
-        slope, intercept = np.polyfit(x, y, 1)
-        return slope, intercept
-
-    def find_entry_point(self, data_1min, trendline):
-        x = np.arange(len(data_1min))
-        trendline_values = trendline[0] * x + trendline[1]
-        below_trendline = data_1min['close'].values <= trendline_values
-        touch_indices = np.where(below_trendline[:-1] & ~below_trendline[1:])[0] + 1
-        
-        if touch_indices.size > 0:
-            entry_index = touch_indices[0]
-            return data_1min.index[entry_index], data_1min['open'].iloc[entry_index]
-        return None, None
-
     def set_approximate_stop_loss(self, entry_point, data_1min):
         stop_loss = data_1min['low'].loc[:entry_point].tail(5).min()
         return stop_loss
 
-    def calculate_trendline(self, data_5min):
-        x = np.arange(len(data_5min))
-        y = data_5min['low'].values
-        slope, intercept = np.polyfit(x, y, 1)
-        return slope, intercept
+    def calculate_trend_line(self, df, direction="high", periods=20, num=2):
+        # Use the last N periods for the calculation
+        df_last_n = df.tail(periods)
+        prices = df_last_n['5min_close'].values
 
-    def check_entry_condition(self, data_1min, trendline, i):
+        # Find pivots
+        if direction == "high":
+            pivots, _ = find_peaks(prices, distance=num)
+        else:
+            pivots, _ = find_peaks(-prices, distance=num)
+
+        # Check if pivots have changed
+        if direction == "high" and pivots != self.last_pivots_high:
+            self.last_pivots_high = pivots
+        elif direction == "low" and pivots != self.last_pivots_low:
+            self.last_pivots_low = pivots
+
+        # If not enough pivots, return None
+        if len(pivots) < num:
+            return np.full_like(prices, np.nan)
+
+        # Calculate trend line using least squares method
+        y = prices[pivots]
+        slope, intercept = np.polyfit(pivots, y, 1)
+        return slope * np.arange(len(df_last_n)) + intercept
+
+    def check_entry_condition(self, data_1min, trendline, i, price_point):
         x = i
         trendline_value = trendline[0] * x + trendline[1]
-        if data_1min['close'].iloc[i-1] <= trendline_value and data_1min['close'].iloc[i] > trendline_value:
-            return True
-        return False
+        if price_point == "low":
+            condition = data_1min['close'].iloc[i-1] <= trendline_value and data_1min['close'].iloc[i] > trendline_value
+        else:
+            condition = data_1min['close'].iloc[i-1] >= trendline_value and data_1min['close'].iloc[i] < trendline_value
+        return condition
 
-    def trade_conditions_func(self, df, i, portfolio):
+    def trade_conditions_func(self, df, i, portfolio, direction="low"):
         close = df.loc[i, 'close']
-        close5 = df.loc[i, '5min_close']
         spread = df.loc[i, 'spread']
-        spread_cost = spread * self.lot_size
-
-        # Spread conversion to currency unit (1 pip = 0.01 yen)
         spread_cost = spread * 0.01 * self.lot_size
 
-        # Profit and loss thresholds
-        TAKE_PROFIT = 0.005 * portfolio['entry_price'] if portfolio['entry_price'] else 0
-        STOP_LOSS = -0.01 * portfolio['entry_price'] if portfolio['entry_price'] else 0
-
-        # Exit conditions for long position
         if portfolio['position'] == 'long':
+            TAKE_PROFIT = portfolio['entry_price'] + 0.0010
+
             profit = (close - portfolio['entry_price']) - spread_cost
-            if profit > TAKE_PROFIT or profit < STOP_LOSS:
+            if close >= TAKE_PROFIT or close <= portfolio['STOP_LOSS']:
+                portfolio['STOP_LOSS'] = None
                 return 'exit_long'
 
-        # Entry conditions for long position
-        elif self.check_entry_condition(df, self.calculate_trendline(df), i):
-            return 'entry_long'
-
+        trendline = self.calculate_trend_line(df, direction)
+        if self.check_entry_condition(df, trendline, i, direction):
+            if direction == "low":
+                portfolio['STOP_LOSS'] = self.last_pivots_low[-1] - 0.0001
+            else:
+                portfolio['STOP_LOSS'] = self.last_pivots_high[-1] + 0.0001
+            return 'entry_long' if direction == "low" else 'entry_short'
         else:
             return None
+
+
 
