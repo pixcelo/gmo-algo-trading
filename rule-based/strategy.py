@@ -99,9 +99,11 @@ class TradingStrategy:
             TAKE_PROFIT = portfolio['entry_price'] + 0.0010
 
             profit = (close - portfolio['entry_price']) - spread_cost
-            if close >= TAKE_PROFIT or close <= portfolio['STOP_LOSS']:
-                portfolio['STOP_LOSS'] = None
-                return 'exit_long'
+            if portfolio['STOP_LOSS'] is not None:
+                if close >= TAKE_PROFIT or close <= portfolio['STOP_LOSS']:
+                    portfolio['STOP_LOSS'] = None
+                    return 'exit_long'
+
 
         trendline = self.calculate_trend_line(df, direction)
         if self.check_entry_condition(df, trendline, i, direction):
