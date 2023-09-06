@@ -1,5 +1,4 @@
 import pandas as pd
-from ta.trend import EMAIndicator
 from scipy.signal import find_peaks
 import numpy as np
 from datetime import datetime
@@ -37,14 +36,14 @@ class TradingStrategy:
         self.last_trendline = None
 
     def prepare_data(self, df):
-        df["EMA50"] = EMAIndicator(df["5min_close"], window=50, fillna=False).ema_indicator()
+        df["EMA50"] = df["5min_close"].ewm(span=50, adjust=False).mean()
         return df
 
     def set_approximate_stop_loss(self, entry_point, data_1min):
         stop_loss = data_1min['low'].loc[:entry_point].tail(5).min()
         return stop_loss
 
-    def calculate_trend_line(self, df, direction="high", periods=20, num=2):
+    def calculate_trend_line(self, df, direction="high", periods=100, num=2):
         # Use the last N periods for the calculation
         df_last_n = df.tail(periods)
         prices = df_last_n['5min_close'].values
@@ -56,10 +55,13 @@ class TradingStrategy:
             pivots, _ = find_peaks(-prices, distance=num)
 
         # Check if pivots have changed
-        if direction == "high" and pivots != self.last_pivots_high:
-            self.last_pivots_high = pivots
-        elif direction == "low" and pivots != self.last_pivots_low:
-            self.last_pivots_low = pivots
+        if direction == "high":
+            if len(pivots) != len(self.last_pivots_high) or np.any(pivots != self.last_pivots_high):
+                self.last_pivots_high = pivots
+        elif direction == "low":
+            if len(pivots) != len(self.last_pivots_low) or np.any(pivots != self.last_pivots_low):
+                self.last_pivots_low = pivots
+
 
         # If not enough pivots, return None
         if len(pivots) < num:
@@ -68,16 +70,24 @@ class TradingStrategy:
         # Calculate trend line using least squares method
         y = prices[pivots]
         slope, intercept = np.polyfit(pivots, y, 1)
-        return slope * np.arange(len(df_last_n)) + intercept
+        trendline = slope * np.arange(len(df_last_n)) + intercept
+
+        # Extend the trendline array to match the original dataframe
+        trendline_full = np.full(len(df), np.nan)
+        trendline_full[-len(trendline):] = trendline
+
+        return trendline_full
 
     def check_entry_condition(self, data_1min, trendline, i, price_point):
-        x = i
-        trendline_value = trendline[0] * x + trendline[1]
+        trendline_index = -100 + (i - len(data_1min) + 100)
+        trendline_value = trendline[trendline_index]
+        print(f'trendline_value {trendline_value}')
         if price_point == "low":
             condition = data_1min['close'].iloc[i-1] <= trendline_value and data_1min['close'].iloc[i] > trendline_value
         else:
             condition = data_1min['close'].iloc[i-1] >= trendline_value and data_1min['close'].iloc[i] < trendline_value
         return condition
+
 
     def trade_conditions_func(self, df, i, portfolio, direction="low"):
         close = df.loc[i, 'close']
