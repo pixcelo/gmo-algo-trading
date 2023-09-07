@@ -26,7 +26,7 @@ class TradingStrategy:
         価格が「トレンドライン(1)」に触れた後、価格が反転する動き（トレンドラインより下に行った、もしくは触れたあとの上昇を指す）を示した場合、そのポイントで取引を開始（エントリー）します。
     （エントリー条件は、１分足でローソク足が一度、トレンドライン１に触れたあと、再度、１分足の終値がトレンドラインの上で確定したときの、次の始値です）
     7. 利確
-        10pipに設定（TODO:将来的にトレールストップを実装する）
+        10pipに設定 TODO:将来的にトレールストップを実装する
     8. ストップロス
         エントリーポイントの直近の安値（極小値）よりも少し下の位置に、損切りのためのストップロス注文を設定
         上昇トレンドラインの起点となっている安値（極小値）のうち、最も近い極小値を直近安値と定義
@@ -34,40 +34,47 @@ class TradingStrategy:
     def __init__(self, lot_size=10000):
         self.lot_size = lot_size
         self.last_pivots_high = []
-        self.last_pivots_low = []
-        self.last_trendline = None
+        self.last_pivots_low = []        
 
     def prepare_data(self, df):
         df["EMA50"] = df["5min_close"].ewm(span=50, adjust=False).mean()
         return df
 
-    def set_approximate_stop_loss(self, entry_point, data_1min):
-        stop_loss = data_1min['low'].loc[:entry_point].tail(5).min()
-        return stop_loss
-
-    def calculate_trend_line(self, df, direction="high", periods=100, num=2):
+    def calculate_trend_line(self, df, aim="longEntry", periods=100, num=2):
         # Use the last N periods for the calculation
         df_last_n = df.tail(periods)
         prices = df_last_n['5min_close'].values
 
-        # Find pivots
-        if direction == "high":
-            pivots, _ = find_peaks(prices, distance=num)
-        else:
-            pivots, _ = find_peaks(-prices, distance=num)
+        # Find pivots for highs and lows
+        pivots_high, _ = find_peaks(prices, distance=num)
+        pivots_low, _ = find_peaks(-prices, distance=num)
 
         # Check if pivots have changed
-        if direction == "high":
-            if len(pivots) != len(self.last_pivots_high) or np.any(pivots != self.last_pivots_high):
-                self.last_pivots_high = pivots
-        elif direction == "low":
-            if len(pivots) != len(self.last_pivots_low) or np.any(pivots != self.last_pivots_low):
-                self.last_pivots_low = pivots
+        if len(pivots_high) != len(self.last_pivots_high) or np.any(pivots_high != self.last_pivots_high):
+            self.last_pivots_high = pivots_high
+    
+        if len(pivots_low) != len(self.last_pivots_low) or np.any(pivots_low != self.last_pivots_low):
+            self.last_pivots_low = pivots_low
 
+        # For aim="longEntry", ensure that both the highs and lows are in an uptrend
+        if aim == "longEntry":
+            if len(pivots_high) < 2 or pivots_high[-1] <= pivots_high[-2]:
+                return None
+            if len(pivots_low) < 2 or pivots_low[-1] <= pivots_low[-2]:
+                return None
+            pivots = pivots_low
+
+        # For aim="shortEntry", ensure that both the highs and lows are in a downtrend
+        elif aim == "shortEntry":
+            if len(pivots_high) < 2 or pivots_high[-1] >= pivots_high[-2]:
+                return None
+            if len(pivots_low) < 2 or pivots_low[-1] >= pivots_low[-2]:
+                return None
+            pivots = pivots_high
 
         # If not enough pivots, return None
         if len(pivots) < num:
-            return np.full_like(prices, np.nan)
+            return None
 
         # Calculate trend line using least squares method
         y = prices[pivots]
@@ -80,6 +87,7 @@ class TradingStrategy:
 
         return trendline_full
 
+
     def check_entry_condition(self, data_1min, trendline, i, price_point):
         trendline_value = trendline[-1]
         # print(f'trendline_value {trendline_value}')
@@ -90,7 +98,7 @@ class TradingStrategy:
         return condition
 
 
-    def trade_conditions_func(self, df, i, portfolio, direction="low"):
+    def trade_conditions_func(self, df, i, portfolio, aim="longEntry"):
         close = df.loc[i, 'close']
         spread = df.loc[i, 'spread']
         spread_cost = spread * 0.01 * self.lot_size
@@ -105,15 +113,14 @@ class TradingStrategy:
                     return 'exit_long'
 
 
-        trendline = self.calculate_trend_line(df, direction)
-        if self.check_entry_condition(df, trendline, i, direction):
-            if direction == "low":
+        trendline = self.calculate_trend_line(df, aim, 200)
+        if self.check_entry_condition(df, trendline, i, aim):
+            if aim == "longEntry":
                 portfolio['STOP_LOSS'] = self.last_pivots_low[-1] - 0.0001
             else:
                 portfolio['STOP_LOSS'] = self.last_pivots_high[-1] + 0.0001
-            return 'entry_long' if direction == "low" else 'entry_short'
+            return 'entry_long' if aim == "longEntry" else 'entry_short'
         else:
             return None
-
 
 
