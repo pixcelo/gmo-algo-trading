@@ -31,14 +31,37 @@ class TradingStrategy:
         エントリーポイントの直近の安値（極小値）よりも少し下の位置に、損切りのためのストップロス注文を設定
         上昇トレンドラインの起点となっている安値（極小値）のうち、最も近い極小値を直近安値と定義
     """
-    def __init__(self, lot_size=10000):
-        self.lot_size = lot_size
+    def __init__(self):
         self.last_pivots_high = []
         self.last_pivots_low = []        
 
     def prepare_data(self, df):
         df["EMA50"] = df["5min_close"].ewm(span=50, adjust=False).mean()
         return df
+    
+    def calculate_pl(self, symbol, position, lot_size, entry_rate, exit_rate, spread, usd_jpy_rate=146):
+        if position == "long":
+            entry_rate_with_spread = entry_rate + spread
+            exit_rate_with_spread = exit_rate
+        elif position == "short":
+            entry_rate_with_spread = entry_rate
+            exit_rate_with_spread = exit_rate + spread
+        else:
+            raise ValueError("Invalid position type. Choose 'long' or 'short'.")
+        
+        value_difference = entry_rate_with_spread - exit_rate_with_spread
+        
+        # For pairs like EURUSD
+        if symbol[-3:] != "JPY":
+            return lot_size * value_difference * usd_jpy_rate
+        
+        # For pairs like USDJPY
+        elif symbol[:3] == "USD":
+            return lot_size * value_difference
+        
+        # For cross currency pairs like EURJPY
+        else:
+            return lot_size * value_difference * entry_rate_with_spread
 
     def calculate_trend_line(self, df, aim="longEntry", periods=100, num=2):
         # Use the last N periods for the calculation
@@ -99,26 +122,28 @@ class TradingStrategy:
 
 
     def trade_conditions_func(self, df, i, portfolio, aim="longEntry"):
+        lot_size = 10000
+        take_profit_pips = 0.0010
         close = df.loc[i, 'close']
         spread = df.loc[i, 'spread']
-        spread_cost = spread * 0.01 * self.lot_size
 
         if portfolio['position'] == 'long':
-            TAKE_PROFIT = portfolio['entry_price'] + 0.0010
 
-            profit = (close - portfolio['entry_price']) - spread_cost
-            if portfolio['STOP_LOSS'] is not None:
-                if close >= TAKE_PROFIT or close <= portfolio['STOP_LOSS']:
-                    portfolio['STOP_LOSS'] = None
-                    return 'exit_long'
+            if close >= portfolio['take_profit'] or close <= portfolio['stop_loss']:
+                portfolio['stop_loss'] = None
+                portfolio['profit'] = self.calculate_pl("EURUSD", "long", lot_size, portfolio['entry_price'], close, spread)
+                return 'exit_long'
 
 
-        trendline = self.calculate_trend_line(df, aim, 200)
+        trendline = self.calculate_trend_line(df, aim, 100)
         if self.check_entry_condition(df, trendline, i, aim):
+            portfolio['entry_price'] = close
             if aim == "longEntry":
-                portfolio['STOP_LOSS'] = self.last_pivots_low[-1] - 0.0001
+                portfolio['take_profit'] = portfolio['entry_price'] + take_profit_pips
+                portfolio['stop_loss'] = self.last_pivots_low[-1] - 0.0001
             else:
-                portfolio['STOP_LOSS'] = self.last_pivots_high[-1] + 0.0001
+                portfolio['take_profit'] = portfolio['entry_price'] - take_profit_pips
+                portfolio['stop_loss'] = self.last_pivots_high[-1] + 0.0001
             return 'entry_long' if aim == "longEntry" else 'entry_short'
         else:
             return None
